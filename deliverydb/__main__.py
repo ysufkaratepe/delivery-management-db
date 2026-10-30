@@ -53,16 +53,19 @@ def benchmark(con: sqlite3.Connection, repeats: int = 200) -> None:
     """Measures one query with and without the idx_packages_customer index."""
     query = "SELECT COUNT(*), SUM(weight_kg) FROM packages WHERE customer_id = ?"
 
-    def measure() -> tuple[float, str]:
-        plan = con.execute("EXPLAIN QUERY PLAN " + query, (1,)).fetchone()[-1]
+    def measure(label: str) -> tuple[float, str]:
+        # The comment makes the SQL text unique, so no cached statement (and no
+        # stale plan) is reused after the index is dropped.
+        sql = f"{query} -- {label}"
+        plan = con.execute("EXPLAIN QUERY PLAN " + sql, (1,)).fetchone()[-1]
         start = time.perf_counter()
         for i in range(repeats):
-            con.execute(query, (i % 400 + 1,)).fetchone()
+            con.execute(sql, (i % 400 + 1,)).fetchone()
         return (time.perf_counter() - start) / repeats * 1000, plan
 
-    with_ms, with_plan = measure()
+    with_ms, with_plan = measure("with index")
     con.execute("DROP INDEX idx_packages_customer")
-    without_ms, without_plan = measure()
+    without_ms, without_plan = measure("without index")
     con.execute("CREATE INDEX idx_packages_customer ON packages(customer_id)")
 
     print(f"Query: {query}\n")
@@ -99,6 +102,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("benchmark")
     sub.add_parser("demo-transaction")
     args = p.parse_args(argv)
+
+    try:  # Windows consoles default to a legacy code page; names like "Yılmaz" need UTF-8
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
 
     if args.command == "build":
         build(DB).close()
